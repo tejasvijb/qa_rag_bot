@@ -55,7 +55,7 @@ def main():
     """Test the crawler with a sample URL."""
     
     # You can change this to test with different URLs
-    BASE_URL = "https://example.com"
+    BASE_URL = "https://react.dev/reference/react"
     MAX_DEPTH = 2
     MAX_PAGES = 10
     
