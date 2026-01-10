@@ -4,8 +4,9 @@ from typing import List, Optional, Dict
 import os
 from dotenv import load_dotenv
 
-# Import the crawler
+# Import the crawler and text extractor
 from crawling.crawler import WebCrawler
+from text_extraction.text_extract import TextExtractor, ExtractedText
 
 # Load environment variables
 load_dotenv()
@@ -33,6 +34,17 @@ class CrawlResponse(BaseModel):
     pages: List[PageData]
 
 
+class ExtractRequest(BaseModel):
+    base_url: str
+    max_depth: Optional[int] = 2
+    max_pages: Optional[int] = 50
+
+
+class ExtractResponse(BaseModel):
+    total_extracted: int
+    extracted_pages: List[ExtractedText]
+
+
 @app.get("/")
 async def root():
     """Root endpoint - API info"""
@@ -40,7 +52,8 @@ async def root():
         "message": "QA RAG Bot API",
         "version": "1.0.0",
         "endpoints": {
-            "crawl": "/crawl"
+            "crawl": "/crawl",
+            "extract": "/extract"
         }
     }
 
@@ -109,6 +122,70 @@ async def crawl_website_get(
     """
     request = CrawlRequest(base_url=base_url, max_depth=max_depth, max_pages=max_pages)
     return await crawl_website(request)
+
+
+@app.post("/extract", response_model=ExtractResponse)
+async def extract_text(request: ExtractRequest):
+    """
+    Crawl a website and extract clean text from all pages.
+    
+    - **base_url**: The starting URL to crawl
+    - **max_depth**: Maximum depth of links to follow (default: 2)
+    - **max_pages**: Maximum number of pages to crawl (default: 50)
+    
+    Returns cleaned text with URL and title, with noise removed and heading boundaries marked.
+    """
+    
+    # Validate base_url
+    if not request.base_url.startswith(('http://', 'https://')):
+        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+    
+    # Validate parameters
+    if request.max_depth < 1 or request.max_depth > 10:
+        raise HTTPException(status_code=400, detail="max_depth must be between 1 and 10")
+    
+    if request.max_pages < 1 or request.max_pages > 500:
+        raise HTTPException(status_code=400, detail="max_pages must be between 1 and 500")
+    
+    try:
+        # Create and run crawler
+        crawler = WebCrawler(
+            base_url=request.base_url,
+            max_depth=request.max_depth,
+            max_pages=request.max_pages,
+            timeout=10
+        )
+        
+        pages = crawler.crawl()
+        
+        # Extract text from crawled pages
+        extractor = TextExtractor()
+        extracted_pages = extractor.process_pages(pages)
+        
+        return ExtractResponse(
+            total_extracted=len(extracted_pages),
+            extracted_pages=extracted_pages
+        )
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Extraction error: {str(e)}")
+
+
+@app.get("/extract", response_model=ExtractResponse)
+async def extract_text_get(
+    base_url: str = Query(..., description="The starting URL to crawl"),
+    max_depth: int = Query(2, description="Maximum depth of links to follow"),
+    max_pages: int = Query(50, description="Maximum number of pages to crawl")
+):
+    """
+    Crawl a website and extract clean text using GET request parameters.
+    
+    - **base_url**: The starting URL to crawl
+    - **max_depth**: Maximum depth of links to follow (default: 2)
+    - **max_pages**: Maximum number of pages to crawl (default: 50)
+    """
+    request = ExtractRequest(base_url=base_url, max_depth=max_depth, max_pages=max_pages)
+    return await extract_text(request)
 
 
 if __name__ == "__main__":
