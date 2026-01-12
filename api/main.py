@@ -4,9 +4,10 @@ from typing import List, Optional, Dict
 import os
 from dotenv import load_dotenv
 
-# Import the crawler and text extractor
+# Import the crawler, text extractor, and chunker
 from crawling.crawler import WebCrawler
 from text_extraction.text_extract import TextExtractor, ExtractedText
+from chunking.chunker import SentenceAwareChunker, TextChunk
 
 # Load environment variables
 load_dotenv()
@@ -45,6 +46,17 @@ class ExtractResponse(BaseModel):
     extracted_pages: List[ExtractedText]
 
 
+class ChunkRequest(BaseModel):
+    extracted_pages: List[ExtractedText]
+    max_chars: Optional[int] = 1800
+    overlap_sentences: Optional[int] = 2
+
+
+class ChunkResponse(BaseModel):
+    total_chunks: int
+    chunks: List[TextChunk]
+
+
 @app.get("/")
 async def root():
     """Root endpoint - API info"""
@@ -53,7 +65,8 @@ async def root():
         "version": "1.0.0",
         "endpoints": {
             "crawl": "/crawl",
-            "extract": "/extract"
+            "extract": "/extract",
+            "chunk": "/chunk"
         }
     }
 
@@ -186,6 +199,55 @@ async def extract_text_get(
     """
     request = ExtractRequest(base_url=base_url, max_depth=max_depth, max_pages=max_pages)
     return await extract_text(request)
+
+
+@app.post("/chunk", response_model=ChunkResponse)
+async def chunk_pages(request: ChunkRequest):
+    """
+    Chunk extracted pages into sentence-aware chunks.
+    
+    - **extracted_pages**: List of ExtractedText objects with cleaned text
+    - **max_chars**: Maximum characters per chunk (default: 1800)
+    - **overlap_sentences**: Number of sentences to overlap between chunks (default: 2)
+    
+    Returns chunks with chunk_id, url, title, and text.
+    """
+    
+    # Validate parameters
+    if request.max_chars < 100 or request.max_chars > 10000:
+        raise HTTPException(status_code=400, detail="max_chars must be between 100 and 10000")
+    
+    if request.overlap_sentences < 0 or request.overlap_sentences > 10:
+        raise HTTPException(status_code=400, detail="overlap_sentences must be between 0 and 10")
+    
+    try:
+        # Create chunker
+        chunker = SentenceAwareChunker(
+            max_chars=request.max_chars,
+            overlap_sentences=request.overlap_sentences
+        )
+        
+        # Convert ExtractedText objects to dictionaries for processing
+        pages_data = [
+            {
+                'url': page.url,
+                'title': page.title,
+                'cleaned_text': page.cleaned_text
+            }
+            for page in request.extracted_pages
+        ]
+        
+        # Process and create chunks
+        chunks = chunker.process_extracted_pages(pages_data)
+        
+        return ChunkResponse(
+            total_chunks=len(chunks),
+            chunks=chunks
+        )
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chunking error: {str(e)}")
+
 
 
 if __name__ == "__main__":
