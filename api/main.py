@@ -47,6 +47,14 @@ class ExtractResponse(BaseModel):
 
 
 class ChunkRequest(BaseModel):
+    base_url: str
+    max_depth: Optional[int] = 2
+    max_pages: Optional[int] = 50
+    max_chars: Optional[int] = 1800
+    overlap_sentences: Optional[int] = 2
+
+
+class ChunkRequestWithPages(BaseModel):
     extracted_pages: List[ExtractedText]
     max_chars: Optional[int] = 1800
     overlap_sentences: Optional[int] = 2
@@ -66,7 +74,8 @@ async def root():
         "endpoints": {
             "crawl": "/crawl",
             "extract": "/extract",
-            "chunk": "/chunk"
+            "chunk": "/chunk",
+            "chunk-pages": "/chunk-pages"
         }
     }
 
@@ -204,7 +213,108 @@ async def extract_text_get(
 @app.post("/chunk", response_model=ChunkResponse)
 async def chunk_pages(request: ChunkRequest):
     """
-    Chunk extracted pages into sentence-aware chunks.
+    Chunk a website starting from base URL and return chunked data.
+    
+    - **base_url**: The starting URL to crawl
+    - **max_depth**: Maximum depth of links to follow (default: 2)
+    - **max_pages**: Maximum number of pages to crawl (default: 50)
+    - **max_chars**: Maximum characters per chunk (default: 1800)
+    - **overlap_sentences**: Number of sentences to overlap between chunks (default: 2)
+    
+    Returns chunks with chunk_id, url, title, and text.
+    """
+    
+    # Validate base_url
+    if not request.base_url.startswith(('http://', 'https://')):
+        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+    
+    # Validate parameters
+    if request.max_depth < 1 or request.max_depth > 10:
+        raise HTTPException(status_code=400, detail="max_depth must be between 1 and 10")
+    
+    if request.max_pages < 1 or request.max_pages > 500:
+        raise HTTPException(status_code=400, detail="max_pages must be between 1 and 500")
+    
+    if request.max_chars < 100 or request.max_chars > 10000:
+        raise HTTPException(status_code=400, detail="max_chars must be between 100 and 10000")
+    
+    if request.overlap_sentences < 0 or request.overlap_sentences > 10:
+        raise HTTPException(status_code=400, detail="overlap_sentences must be between 0 and 10")
+    
+    try:
+        # Create and run crawler
+        crawler = WebCrawler(
+            base_url=request.base_url,
+            max_depth=request.max_depth,
+            max_pages=request.max_pages,
+            timeout=10
+        )
+        
+        pages = crawler.crawl()
+        
+        # Extract text from crawled pages
+        extractor = TextExtractor()
+        extracted_pages = extractor.process_pages(pages)
+        
+        # Create chunker
+        chunker = SentenceAwareChunker(
+            max_chars=request.max_chars,
+            overlap_sentences=request.overlap_sentences
+        )
+        
+        # Convert ExtractedText objects to dictionaries for processing
+        pages_data = [
+            {
+                'url': page.url,
+                'title': page.title,
+                'cleaned_text': page.cleaned_text
+            }
+            for page in extracted_pages
+        ]
+        
+        # Process and create chunks
+        chunks = chunker.process_extracted_pages(pages_data)
+        
+        return ChunkResponse(
+            total_chunks=len(chunks),
+            chunks=chunks
+        )
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chunking error: {str(e)}")
+
+
+@app.get("/chunk", response_model=ChunkResponse)
+async def chunk_pages_get(
+    base_url: str = Query(..., description="The starting URL to crawl"),
+    max_depth: int = Query(2, description="Maximum depth of links to follow"),
+    max_pages: int = Query(50, description="Maximum number of pages to crawl"),
+    max_chars: int = Query(1800, description="Maximum characters per chunk"),
+    overlap_sentences: int = Query(2, description="Number of sentences to overlap between chunks")
+):
+    """
+    Chunk a website using GET request parameters.
+    
+    - **base_url**: The starting URL to crawl
+    - **max_depth**: Maximum depth of links to follow (default: 2)
+    - **max_pages**: Maximum number of pages to crawl (default: 50)
+    - **max_chars**: Maximum characters per chunk (default: 1800)
+    - **overlap_sentences**: Number of sentences to overlap between chunks (default: 2)
+    """
+    request = ChunkRequest(
+        base_url=base_url,
+        max_depth=max_depth,
+        max_pages=max_pages,
+        max_chars=max_chars,
+        overlap_sentences=overlap_sentences
+    )
+    return await chunk_pages(request)
+
+
+@app.post("/chunk-pages", response_model=ChunkResponse)
+async def chunk_extracted_pages(request: ChunkRequestWithPages):
+    """
+    Chunk already-extracted pages into sentence-aware chunks.
     
     - **extracted_pages**: List of ExtractedText objects with cleaned text
     - **max_chars**: Maximum characters per chunk (default: 1800)

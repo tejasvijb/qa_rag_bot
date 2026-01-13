@@ -4,11 +4,11 @@ from typing import List, Dict, Optional
 from pydantic import BaseModel
 import hashlib
 
-# Download punkt tokenizer if not already present
+# Download punkt_tab tokenizer if not already present
 try:
-    nltk.data.find('tokenizers/punkt')
+    nltk.data.find('tokenizers/punkt_tab')
 except LookupError:
-    nltk.download('punkt')
+    nltk.download('punkt_tab')
 
 
 class TextChunk(BaseModel):
