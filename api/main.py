@@ -3,11 +3,22 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict
 import os
 from dotenv import load_dotenv
+import logging
 
 # Import the crawler, text extractor, and chunker
 from crawling.crawler import WebCrawler
 from text_extraction.text_extract import TextExtractor, ExtractedText
 from chunking.chunker import SentenceAwareChunker, TextChunk
+
+# Import embeddings module
+from embeddings.embeddings import add_embeddings, query_embeddings, get_or_create_collection
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -19,6 +30,26 @@ class CrawlRequest(BaseModel):
     base_url: str
     max_depth: Optional[int] = 2
     max_pages: Optional[int] = 50
+
+
+class IngestRequest(BaseModel):
+    base_url: str
+    max_depth: Optional[int] = 2
+    max_pages: Optional[int] = 50
+    max_chars: Optional[int] = 1800
+    overlap_sentences: Optional[int] = 2
+    collection_name: Optional[str] = "rag_bot"
+
+
+class IngestResponse(BaseModel):
+    status: str
+    message: str
+    crawled_pages: int
+    extracted_pages: int
+    total_chunks: int
+    embeddings_added: int
+    collection_name: str
+    details: Dict
 
 
 class PageData(BaseModel):
@@ -65,6 +96,28 @@ class ChunkResponse(BaseModel):
     chunks: List[TextChunk]
 
 
+class RetrieveRequest(BaseModel):
+    query: str
+    n_results: Optional[int] = 5
+    collection_name: Optional[str] = "rag_bot"
+
+
+class RetrieveResult(BaseModel):
+    rank: int
+    text: str
+    url: str
+    title: Optional[str]
+    distance: Optional[float] = None
+
+
+class RetrieveResponse(BaseModel):
+    status: str
+    query: str
+    collection_name: str
+    total_results: int
+    results: List[RetrieveResult]
+
+
 @app.get("/")
 async def root():
     """Root endpoint - API info"""
@@ -75,7 +128,9 @@ async def root():
             "crawl": "/crawl",
             "extract": "/extract",
             "chunk": "/chunk",
-            "chunk-pages": "/chunk-pages"
+            "chunk-pages": "/chunk-pages",
+            "ingest": "/ingest",
+            "retrieve": "/retrieve"
         }
     }
 
@@ -358,6 +413,270 @@ async def chunk_extracted_pages(request: ChunkRequestWithPages):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chunking error: {str(e)}")
 
+
+@app.post("/ingest", response_model=IngestResponse)
+async def ingest_website(request: IngestRequest):
+    """
+    Complete ingestion pipeline: crawl, extract, chunk, and store embeddings.
+    
+    - **base_url**: The starting URL to crawl
+    - **max_depth**: Maximum depth of links to follow (default: 2)
+    - **max_pages**: Maximum number of pages to crawl (default: 50)
+    - **max_chars**: Maximum characters per chunk (default: 1800)
+    - **overlap_sentences**: Number of sentences to overlap between chunks (default: 2)
+    - **collection_name**: Chroma collection name (default: "rag_bot")
+    
+    Returns ingestion status with crawl, extraction, chunking, and embedding statistics.
+    """
+    
+    logger.info(f"Starting ingest pipeline for URL: {request.base_url}")
+    
+    # Validate base_url
+    if not request.base_url.startswith(('http://', 'https://')):
+        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+    
+    # Validate parameters
+    if request.max_depth < 1 or request.max_depth > 10:
+        raise HTTPException(status_code=400, detail="max_depth must be between 1 and 10")
+    
+    if request.max_pages < 1 or request.max_pages > 500:
+        raise HTTPException(status_code=400, detail="max_pages must be between 1 and 500")
+    
+    if request.max_chars < 100 or request.max_chars > 10000:
+        raise HTTPException(status_code=400, detail="max_chars must be between 100 and 10000")
+    
+    if request.overlap_sentences < 0 or request.overlap_sentences > 10:
+        raise HTTPException(status_code=400, detail="overlap_sentences must be between 0 and 10")
+    
+    try:
+        details = {}
+        
+        # Step 1: Crawl the website
+        logger.info(f"[CRAWL] Starting crawl with max_depth={request.max_depth}, max_pages={request.max_pages}")
+        crawler = WebCrawler(
+            base_url=request.base_url,
+            max_depth=request.max_depth,
+            max_pages=request.max_pages,
+            timeout=10
+        )
+        
+        pages = crawler.crawl()
+        successful_pages = sum(1 for page in pages if page['error'] is None)
+        failed_pages = sum(1 for page in pages if page['error'] is not None)
+        
+        logger.info(f"[CRAWL] Completed: {successful_pages} successful, {failed_pages} failed pages")
+        details['crawl_summary'] = {
+            'total_pages': len(pages),
+            'successful_pages': successful_pages,
+            'failed_pages': failed_pages
+        }
+        
+        # Step 2: Extract text from crawled pages
+        logger.info(f"[EXTRACT] Starting text extraction from {successful_pages} pages")
+        extractor = TextExtractor()
+        extracted_pages = extractor.process_pages(pages)
+        
+        logger.info(f"[EXTRACT] Completed: {len(extracted_pages)} pages extracted")
+        details['extraction_summary'] = {
+            'total_extracted': len(extracted_pages)
+        }
+        
+        # Step 3: Chunk the extracted text
+        logger.info(f"[CHUNK] Starting chunking with max_chars={request.max_chars}, overlap_sentences={request.overlap_sentences}")
+        chunker = SentenceAwareChunker(
+            max_chars=request.max_chars,
+            overlap_sentences=request.overlap_sentences
+        )
+        
+        # Convert ExtractedText objects to dictionaries
+        pages_data = [
+            {
+                'url': page.url,
+                'title': page.title,
+                'cleaned_text': page.cleaned_text
+            }
+            for page in extracted_pages
+        ]
+        
+        chunks = chunker.process_extracted_pages(pages_data)
+        logger.info(f"[CHUNK] Completed: {len(chunks)} chunks created")
+        details['chunk_summary'] = {
+            'total_chunks': len(chunks),
+            'average_chunk_size': int(sum(len(c.text) for c in chunks) / len(chunks)) if chunks else 0
+        }
+        
+        # Step 4: Store embeddings to Chroma collection
+        logger.info(f"[EMBED] Starting embedding storage to collection '{request.collection_name}'")
+        
+        # Convert TextChunk objects to dictionaries for embedding storage
+        chunk_dicts = [
+            {
+                'chunk_id': chunk.chunk_id,
+                'url': chunk.url,
+                'title': chunk.title,
+                'text': chunk.text
+            }
+            for chunk in chunks
+        ]
+        
+        embed_result = add_embeddings(chunk_dicts, request.collection_name)
+        
+        if embed_result['status'] != 'success':
+            logger.error(f"[EMBED] Failed: {embed_result['message']}")
+            raise HTTPException(status_code=500, detail=f"Embedding storage failed: {embed_result['message']}")
+        
+        embeddings_added = embed_result.get('count', 0)
+        logger.info(f"[EMBED] Completed: {embeddings_added} embeddings stored")
+        details['embedding_summary'] = {
+            'embeddings_added': embeddings_added,
+            'collection': request.collection_name
+        }
+        
+        # Final summary
+        logger.info(f"[INGEST] Pipeline completed successfully. Total embeddings added: {embeddings_added}")
+        
+        return IngestResponse(
+            status="success",
+            message=f"Successfully ingested website and stored {embeddings_added} embeddings",
+            crawled_pages=len(pages),
+            extracted_pages=len(extracted_pages),
+            total_chunks=len(chunks),
+            embeddings_added=embeddings_added,
+            collection_name=request.collection_name,
+            details=details
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[INGEST] Pipeline failed with error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Ingestion pipeline error: {str(e)}")
+
+
+@app.get("/ingest", response_model=IngestResponse)
+async def ingest_website_get(
+    base_url: str = Query(..., description="The starting URL to crawl"),
+    max_depth: int = Query(2, description="Maximum depth of links to follow"),
+    max_pages: int = Query(50, description="Maximum number of pages to crawl"),
+    max_chars: int = Query(1800, description="Maximum characters per chunk"),
+    overlap_sentences: int = Query(2, description="Number of sentences to overlap between chunks"),
+    collection_name: str = Query("rag_bot", description="Chroma collection name")
+):
+    """
+    Complete ingestion pipeline using GET request parameters.
+    
+    - **base_url**: The starting URL to crawl
+    - **max_depth**: Maximum depth of links to follow (default: 2)
+    - **max_pages**: Maximum number of pages to crawl (default: 50)
+    - **max_chars**: Maximum characters per chunk (default: 1800)
+    - **overlap_sentences**: Number of sentences to overlap between chunks (default: 2)
+    - **collection_name**: Chroma collection name (default: "rag_bot")
+    """
+    request = IngestRequest(
+        base_url=base_url,
+        max_depth=max_depth,
+        max_pages=max_pages,
+        max_chars=max_chars,
+        overlap_sentences=overlap_sentences,
+        collection_name=collection_name
+    )
+    return await ingest_website(request)
+
+
+
+@app.post("/retrieve", response_model=RetrieveResponse)
+async def retrieve_query(request: RetrieveRequest):
+    """
+    Query the ingested embeddings and return relevant results.
+    
+    - **query**: The question or search query
+    - **n_results**: Number of results to return (default: 5, max: 20)
+    - **collection_name**: Chroma collection name (default: "rag_bot")
+    
+    Returns the most relevant chunks from the ingested documents.
+    """
+    
+    logger.info(f"[RETRIEVE] Query received: {request.query}")
+    
+    # Validate query
+    if not request.query or not request.query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    
+    # Validate n_results
+    if request.n_results < 1 or request.n_results > 20:
+        raise HTTPException(status_code=400, detail="n_results must be between 1 and 20")
+    
+    try:
+        logger.info(f"[RETRIEVE] Querying collection '{request.collection_name}' with n_results={request.n_results}")
+        
+        # Query embeddings
+        results = query_embeddings(
+            query_text=request.query,
+            n_results=request.n_results,
+            collection_name=request.collection_name
+        )
+        
+        if not results or not results.get('documents'):
+            logger.warning(f"[RETRIEVE] No results found for query: {request.query}")
+            return RetrieveResponse(
+                status="success",
+                query=request.query,
+                collection_name=request.collection_name,
+                total_results=0,
+                results=[]
+            )
+        
+        # Parse results
+        documents = results.get('documents', [[]])[0]
+        metadatas = results.get('metadatas', [[]])[0]
+        distances = results.get('distances', [[]])[0] if results.get('distances') else [None] * len(documents)
+        
+        retrieve_results = []
+        for rank, (doc, metadata, distance) in enumerate(zip(documents, metadatas, distances), 1):
+            retrieve_results.append(
+                RetrieveResult(
+                    rank=rank,
+                    text=doc,
+                    url=metadata.get('url', ''),
+                    title=metadata.get('title'),
+                    distance=distance
+                )
+            )
+        
+        logger.info(f"[RETRIEVE] Found {len(retrieve_results)} results for query")
+        
+        return RetrieveResponse(
+            status="success",
+            query=request.query,
+            collection_name=request.collection_name,
+            total_results=len(retrieve_results),
+            results=retrieve_results
+        )
+    
+    except Exception as e:
+        logger.error(f"[RETRIEVE] Query failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Query error: {str(e)}")
+
+
+@app.get("/retrieve", response_model=RetrieveResponse)
+async def retrieve_query_get(
+    query: str = Query(..., description="The question or search query"),
+    n_results: int = Query(5, description="Number of results to return"),
+    collection_name: str = Query("rag_bot", description="Chroma collection name")
+):
+    """
+    Query the ingested embeddings using GET request parameters.
+    
+    - **query**: The question or search query
+    - **n_results**: Number of results to return (default: 5, max: 20)
+    - **collection_name**: Chroma collection name (default: "rag_bot")
+    """
+    request = RetrieveRequest(
+        query=query,
+        n_results=n_results,
+        collection_name=collection_name
+    )
+    return await retrieve_query(request)
 
 
 if __name__ == "__main__":
