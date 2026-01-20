@@ -13,6 +13,9 @@ from chunking.chunker import SentenceAwareChunker, TextChunk
 # Import embeddings module
 from embeddings.embeddings import add_embeddings, query_embeddings, get_or_create_collection
 
+# Import ask module
+from ask.ask import ask_question
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -118,6 +121,29 @@ class RetrieveResponse(BaseModel):
     results: List[RetrieveResult]
 
 
+class ContextUsed(BaseModel):
+    text: str
+    url: str
+    title: Optional[str]
+    distance: Optional[float] = None
+
+
+class AskRequest(BaseModel):
+    query: str
+    n_results: Optional[int] = 5
+    collection_name: Optional[str] = "rag_bot"
+
+
+class AskResponse(BaseModel):
+    status: str
+    query: str
+    answer: str
+    context_used: List[ContextUsed]
+    total_context_chunks: Optional[int] = None
+    collection_name: str
+    error: Optional[str] = None
+
+
 @app.get("/")
 async def root():
     """Root endpoint - API info"""
@@ -130,7 +156,8 @@ async def root():
             "chunk": "/chunk",
             "chunk-pages": "/chunk-pages",
             "ingest": "/ingest",
-            "retrieve": "/retrieve"
+            "retrieve": "/retrieve",
+            "ask": "/ask"
         }
     }
 
@@ -677,6 +704,97 @@ async def retrieve_query_get(
         collection_name=collection_name
     )
     return await retrieve_query(request)
+
+
+@app.post("/ask", response_model=AskResponse)
+async def ask_endpoint(request: AskRequest):
+    """
+    Ask a question and get an answer based on ingested documents.
+    
+    - **query**: The question to ask
+    - **n_results**: Number of context chunks to retrieve (default: 5, max: 20)
+    - **collection_name**: Chroma collection name (default: "rag_bot")
+    
+    Returns the AI-generated answer based on the most relevant context from the ingested documents.
+    If no relevant context is found, returns "No relevant context found".
+    """
+    
+    logger.info(f"[ASK] Question received: {request.query}")
+    
+    # Validate query
+    if not request.query or not request.query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    
+    # Validate n_results
+    if request.n_results < 1 or request.n_results > 20:
+        raise HTTPException(status_code=400, detail="n_results must be between 1 and 20")
+    
+    try:
+        # Step 1: Query embeddings from ChromaDB
+        logger.info(f"[ASK] Retrieving context with n_results={request.n_results}")
+        context_results = query_embeddings(
+            query_text=request.query,
+            n_results=request.n_results,
+            collection_name=request.collection_name
+        )
+        
+        # Step 2: Ask question using OpenAI with context
+        logger.info("[ASK] Generating answer using OpenAI")
+        answer_response = ask_question(
+            query=request.query,
+            context_results=context_results,
+            collection_name=request.collection_name
+        )
+        
+        # Convert context_used to ContextUsed objects
+        context_used = [
+            ContextUsed(
+                text=ctx['text'],
+                url=ctx['url'],
+                title=ctx.get('title'),
+                distance=ctx.get('distance')
+            )
+            for ctx in answer_response.get('context_used', [])
+        ]
+        
+        logger.info(f"[ASK] Answer generated successfully with {len(context_used)} context chunks")
+        
+        return AskResponse(
+            status=answer_response['status'],
+            query=request.query,
+            answer=answer_response['answer'],
+            context_used=context_used,
+            total_context_chunks=answer_response.get('total_context_chunks'),
+            collection_name=request.collection_name,
+            error=answer_response.get('error')
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[ASK] Error processing question: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
+
+
+@app.get("/ask", response_model=AskResponse)
+async def ask_endpoint_get(
+    query: str = Query(..., description="The question to ask"),
+    n_results: int = Query(5, description="Number of context chunks to retrieve"),
+    collection_name: str = Query("rag_bot", description="Chroma collection name")
+):
+    """
+    Ask a question using GET request parameters.
+    
+    - **query**: The question to ask
+    - **n_results**: Number of context chunks to retrieve (default: 5, max: 20)
+    - **collection_name**: Chroma collection name (default: "rag_bot")
+    """
+    request = AskRequest(
+        query=query,
+        n_results=n_results,
+        collection_name=collection_name
+    )
+    return await ask_endpoint(request)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,13 @@
 
 ## Overview
 
-The `/ask` endpoint allows you to query your ingested knowledge base and retrieve relevant documents. It uses semantic search through Chroma embeddings to find the most relevant chunks matching your query.
+The `/ask` endpoint is a powerful question-answering endpoint that combines:
+
+1. **Semantic Search** - Retrieves relevant context from ChromaDB using embeddings
+2. **OpenAI Integration** - Generates intelligent answers based on retrieved context
+3. **Source Attribution** - Returns the documents used to generate the answer
+
+Unlike the `/retrieve` endpoint which returns raw search results, the `/ask` endpoint generates answers using OpenAI's language model.
 
 ## Endpoints
 
