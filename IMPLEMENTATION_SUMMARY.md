@@ -4,20 +4,19 @@
 
 Successfully implemented a comprehensive text extraction module for the QA RAG Bot that:
 
--   ✅ Removes navbars, footers, scripts, and cookie banners
--   ✅ Extracts visible text only
--   ✅ Removes noise and empty lines
--   ✅ Stores cleaned text with URL and title
--   ✅ Uses CSS selectors for precise noise removal
--   ✅ Flattens text while marking heading boundaries with line breaks
--   ✅ Uses Pydantic models for type safety
+- ✅ Removes navbars, footers, scripts, and cookie banners
+- ✅ Extracts visible text only
+- ✅ Removes noise and empty lines
+- ✅ Stores cleaned text with URL and title
+- ✅ Uses CSS selectors for precise noise removal
+- ✅ Flattens text while marking heading boundaries with line breaks
+- ✅ Uses Pydantic models for type safety
 
 ## Files Created/Modified
 
 ### New Files
 
 1. **[text_extraction/text_extract.py](text_extraction/text_extract.py)** (242 lines)
-
     - `ExtractedText` Pydantic model for type-safe output
     - `TextExtractor` class with the following methods:
         - `remove_noise()`: Uses CSS selectors to remove 20+ noise patterns
@@ -27,7 +26,6 @@ Successfully implemented a comprehensive text extraction module for the QA RAG B
     - `extract_text_from_html()`: Convenience function for quick extraction
 
 2. **[test_extractor.py](test_extractor.py)** (125 lines)
-
     - Comprehensive test suite verifying:
         - Noise removal (nav, footer, scripts, cookie banners, sidebars)
         - Content preservation (headings, paragraphs, text)
@@ -35,7 +33,6 @@ Successfully implemented a comprehensive text extraction module for the QA RAG B
         - Error handling
 
 3. **[example_usage.py](example_usage.py)** (180+ lines)
-
     - Three complete examples showing different usage patterns
     - API usage instructions with curl examples
     - Real-world use cases
@@ -79,19 +76,19 @@ NOISE_SELECTORS = [
 
 ### Smart Text Extraction
 
--   **Heading boundaries marked** with line breaks (h1-h6 tags)
--   **Comments filtered** to exclude HTML comments
--   **Flatten structure** while preserving semantic breaks
--   **Clean whitespace** by removing extra spaces and empty lines
--   **Preserve text flow** with proper spacing between elements
+- **Heading boundaries marked** with line breaks (h1-h6 tags)
+- **Comments filtered** to exclude HTML comments
+- **Flatten structure** while preserving semantic breaks
+- **Clean whitespace** by removing extra spaces and empty lines
+- **Preserve text flow** with proper spacing between elements
 
 ### Type Safety
 
 All data structures use Pydantic models:
 
--   `ExtractedText`: Output model with url, title, cleaned_text
--   `ExtractRequest`: Input validation for API
--   `ExtractResponse`: Response wrapper with metadata
+- `ExtractedText`: Output model with url, title, cleaned_text
+- `ExtractRequest`: Input validation for API
+- `ExtractResponse`: Response wrapper with metadata
 
 ## API Integration
 
@@ -136,9 +133,9 @@ Text extraction is the **second stage** of the RAG pipeline:
 Crawler → Text Extraction → Chunking → Embeddings → Storage → Retrieval
 ```
 
--   Receives: Raw HTML from WebCrawler
--   Produces: Clean text ready for chunking and embedding
--   Passes to: Chunking module (next stage)
+- Receives: Raw HTML from WebCrawler
+- Produces: Clean text ready for chunking and embedding
+- Passes to: Chunking module (next stage)
 
 ## Usage Examples
 
@@ -184,36 +181,36 @@ python test_extractor.py
 
 Test coverage includes:
 
--   ✅ Noise element removal (nav, footer, scripts, cookie banners, sidebars)
--   ✅ Visible text extraction
--   ✅ Heading boundary preservation
--   ✅ Empty line removal
--   ✅ Whitespace cleanup
--   ✅ Batch page processing
--   ✅ Error handling for failed pages
--   ✅ HTML comment filtering
+- ✅ Noise element removal (nav, footer, scripts, cookie banners, sidebars)
+- ✅ Visible text extraction
+- ✅ Heading boundary preservation
+- ✅ Empty line removal
+- ✅ Whitespace cleanup
+- ✅ Batch page processing
+- ✅ Error handling for failed pages
+- ✅ HTML comment filtering
 
 ## Technical Details
 
 ### Dependencies
 
--   `beautifulsoup4==4.14.3` - HTML parsing with CSS selector support
--   `pydantic==2.12.5` - Data validation and type safety
--   `requests==2.32.5` - HTTP client (via crawler)
+- `beautifulsoup4==4.14.3` - HTML parsing with CSS selector support
+- `pydantic==2.12.5` - Data validation and type safety
+- `requests==2.32.5` - HTTP client (via crawler)
 
 ### Performance
 
--   CSS selector-based filtering (efficient DOM traversal)
--   Single-pass recursive text extraction
--   Minimal memory overhead
--   Handles large HTML documents efficiently
+- CSS selector-based filtering (efficient DOM traversal)
+- Single-pass recursive text extraction
+- Minimal memory overhead
+- Handles large HTML documents efficiently
 
 ### Error Handling
 
--   Graceful handling of pages with errors (skipped with logging)
--   BeautifulSoup's robust HTML parsing
--   Filter out pages with no extractable text
--   Optional title field for pages without titles
+- Graceful handling of pages with errors (skipped with logging)
+- BeautifulSoup's robust HTML parsing
+- Filter out pages with no extractable text
+- Optional title field for pages without titles
 
 ## Next Steps
 
