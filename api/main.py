@@ -4,6 +4,8 @@ from typing import List, Optional, Dict
 import os
 from dotenv import load_dotenv
 import logging
+from api.v1.routes.userRoutes import router as auth_router
+
 
 # Import the crawler, text extractor, and chunker
 from crawling.crawler import WebCrawler
@@ -143,6 +145,7 @@ class AskResponse(BaseModel):
     collection_name: str
     error: Optional[str] = None
 
+app.include_router(auth_router)
 
 @app.get("/")
 async def root():
