@@ -1,11 +1,16 @@
+from contextlib import asynccontextmanager
+import time
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 import os
 from dotenv import load_dotenv
 import logging
 from api.v1.routes.userRoutes import router as auth_router
-
+from api.v1.config.dbconnection import Base, init_db
+from api.v1.models import *
 
 # Import the crawler, text extractor, and chunker
 from crawling.crawler import WebCrawler
@@ -27,8 +32,36 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
+# print(Base.metadata.tables.keys())
 
-app = FastAPI(title="QA RAG Bot API", version="1.0.0")
+
+
+# Define lifespan context manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Initialize database tables
+    logger.info("Initializing database tables...")
+    init_db()
+    logger.info("Database tables initialized successfully")
+    yield
+    # Shutdown: Clean up if needed
+    logger.info("Application shutting down...")
+
+app = FastAPI(title="QA RAG Bot API", version="1.0.0", lifespan=lifespan)
+
+# CORS Configuration
+cors_options = {
+    "allow_origins": os.getenv("FRONTEND_URL", "http://localhost:3000").split(","),
+    "allow_credentials": True,
+    "allow_methods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    "allow_headers": ["Content-Type", "Authorization", "Cookie"],
+}
+
+# Add CORS middleware
+app.add_middleware(CORSMiddleware, **cors_options)
+
+# Add session middleware for cookie support
+app.add_middleware(SessionMiddleware, secret_key=os.getenv("SECRET_KEY", "your-secret-key-change-this"))
 
 # Request/Response models
 class CrawlRequest(BaseModel):
@@ -165,7 +198,9 @@ async def root():
     }
 
 
-@app.post("/crawl", response_model=CrawlResponse)
+base_url = '/api/v1'
+
+@app.post(f"{base_url}/crawl", response_model=CrawlResponse)
 async def crawl_website(request: CrawlRequest):
     """
     Crawl a website starting from the given base URL.
@@ -214,7 +249,7 @@ async def crawl_website(request: CrawlRequest):
         raise HTTPException(status_code=500, detail=f"Crawling error: {str(e)}")
 
 
-@app.get("/crawl", response_model=CrawlResponse)
+@app.get(f"{base_url}/crawl", response_model=CrawlResponse)
 async def crawl_website_get(
     base_url: str = Query(..., description="The starting URL to crawl"),
     max_depth: int = Query(2, description="Maximum depth of links to follow"),
@@ -231,7 +266,7 @@ async def crawl_website_get(
     return await crawl_website(request)
 
 
-@app.post("/extract", response_model=ExtractResponse)
+@app.post(f"{base_url}/extract", response_model=ExtractResponse)
 async def extract_text(request: ExtractRequest):
     """
     Crawl a website and extract clean text from all pages.
@@ -278,7 +313,7 @@ async def extract_text(request: ExtractRequest):
         raise HTTPException(status_code=500, detail=f"Extraction error: {str(e)}")
 
 
-@app.get("/extract", response_model=ExtractResponse)
+@app.get(f"{base_url}/extract", response_model=ExtractResponse)
 async def extract_text_get(
     base_url: str = Query(..., description="The starting URL to crawl"),
     max_depth: int = Query(2, description="Maximum depth of links to follow"),
@@ -295,7 +330,7 @@ async def extract_text_get(
     return await extract_text(request)
 
 
-@app.post("/chunk", response_model=ChunkResponse)
+@app.post(f"{base_url}/chunk", response_model=ChunkResponse)
 async def chunk_pages(request: ChunkRequest):
     """
     Chunk a website starting from base URL and return chunked data.
@@ -369,7 +404,7 @@ async def chunk_pages(request: ChunkRequest):
         raise HTTPException(status_code=500, detail=f"Chunking error: {str(e)}")
 
 
-@app.get("/chunk", response_model=ChunkResponse)
+@app.get(f"{base_url}/chunk", response_model=ChunkResponse)
 async def chunk_pages_get(
     base_url: str = Query(..., description="The starting URL to crawl"),
     max_depth: int = Query(2, description="Maximum depth of links to follow"),
@@ -396,7 +431,7 @@ async def chunk_pages_get(
     return await chunk_pages(request)
 
 
-@app.post("/chunk-pages", response_model=ChunkResponse)
+@app.post(f"{base_url}/chunk-pages", response_model=ChunkResponse)
 async def chunk_extracted_pages(request: ChunkRequestWithPages):
     """
     Chunk already-extracted pages into sentence-aware chunks.
@@ -444,7 +479,7 @@ async def chunk_extracted_pages(request: ChunkRequestWithPages):
         raise HTTPException(status_code=500, detail=f"Chunking error: {str(e)}")
 
 
-@app.post("/ingest", response_model=IngestResponse)
+@app.post(f"{base_url}/ingest", response_model=IngestResponse)
 async def ingest_website(request: IngestRequest):
     """
     Complete ingestion pipeline: crawl, extract, chunk, and store embeddings.
@@ -583,7 +618,7 @@ async def ingest_website(request: IngestRequest):
         raise HTTPException(status_code=500, detail=f"Ingestion pipeline error: {str(e)}")
 
 
-@app.get("/ingest", response_model=IngestResponse)
+@app.get(f"{base_url}/ingest", response_model=IngestResponse)
 async def ingest_website_get(
     base_url: str = Query(..., description="The starting URL to crawl"),
     max_depth: int = Query(2, description="Maximum depth of links to follow"),
@@ -614,7 +649,7 @@ async def ingest_website_get(
 
 
 
-@app.post("/retrieve", response_model=RetrieveResponse)
+@app.post(f"{base_url}/retrieve", response_model=RetrieveResponse)
 async def retrieve_query(request: RetrieveRequest):
     """
     Query the ingested embeddings and return relevant results.
@@ -688,7 +723,7 @@ async def retrieve_query(request: RetrieveRequest):
         raise HTTPException(status_code=500, detail=f"Query error: {str(e)}")
 
 
-@app.get("/retrieve", response_model=RetrieveResponse)
+@app.get(f"{base_url}/retrieve", response_model=RetrieveResponse)
 async def retrieve_query_get(
     query: str = Query(..., description="The question or search query"),
     n_results: int = Query(5, description="Number of results to return"),
@@ -709,7 +744,7 @@ async def retrieve_query_get(
     return await retrieve_query(request)
 
 
-@app.post("/ask", response_model=AskResponse)
+@app.post(f"{base_url}/ask", response_model=AskResponse)
 async def ask_endpoint(request: AskRequest):
     """
     Ask a question and get an answer based on ingested documents.
@@ -779,7 +814,7 @@ async def ask_endpoint(request: AskRequest):
         raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
 
 
-@app.get("/ask", response_model=AskResponse)
+@app.get(f"{base_url}/ask", response_model=AskResponse)
 async def ask_endpoint_get(
     query: str = Query(..., description="The question to ask"),
     n_results: int = Query(5, description="Number of context chunks to retrieve"),

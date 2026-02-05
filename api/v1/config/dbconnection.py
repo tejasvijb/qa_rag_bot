@@ -2,10 +2,15 @@
 Database connection configuration for the QA RAG Bot API
 """
 import os
-from sqlalchemy import create_engine, event
+import logging
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import QueuePool
+from sqlalchemy.exc import OperationalError
+from psycopg2 import errors as psycopg2_errors
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -67,9 +72,27 @@ def get_db():
 def init_db():
     """
     Initialize database - creates all tables from Base metadata
-    Call this once when the application starts
+    Safely handles the case where tables/indexes already exist
     """
-    Base.metadata.create_all(bind=engine)
+    try:
+        logger.info(f"Initializing database schema...")
+        logger.info(f"Tables to create: {list(Base.metadata.tables.keys())}")
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database schema initialization completed successfully")
+        
+        # Verify tables were created
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT table_name FROM information_schema.tables WHERE table_schema='public'"))
+            tables = [row[0] for row in result]
+            logger.info(f"✓ Available tables after creation: {tables}")
+    except Exception as e:
+        error_str = str(e)
+        if "already exists" in error_str or "DuplicateTable" in str(type(e)):
+            logger.warning(f"Database schema already exists: {e}")
+        else:
+            logger.error(f"Error during database initialization: {e}")
+            raise
+
 
 
 def test_connection():
